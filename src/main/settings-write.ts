@@ -34,6 +34,18 @@ import {
   type SettingChangeKey,
 } from './profiles/profile-settings'
 
+// Companion mode hook: extra listeners for setting/league updates that bypass
+// webContents.send (used when no overlay window exists, e.g. Hyprland).
+const settingUpdateListeners: Array<(key: SettingChangeKey, value: unknown) => void> = []
+const leagueUpdateListeners: Array<(league: string) => void> = []
+
+export function addCompanionSettingListener(cb: (key: SettingChangeKey, value: unknown) => void): void {
+  settingUpdateListeners.push(cb)
+}
+export function addCompanionLeagueListener(cb: (league: string) => void): void {
+  leagueUpdateListeners.push(cb)
+}
+
 export function broadcastSettingUpdate(sender: WebContents | null, key: SettingChangeKey, value: unknown): void {
   const csWin = getCheatSheetsOverlay()?.getWindow() ?? null
   const pinnedWin = getPinnedZoneOverlay()?.getWindow() ?? null
@@ -50,6 +62,7 @@ export function broadcastSettingUpdate(sender: WebContents | null, key: SettingC
       }
     })
     .catch(() => {})
+  for (const cb of settingUpdateListeners) cb(key, value)
 }
 
 function sideEffect(setting: ProfileChangedSetting, prevAppSettings?: AppSettings): void {
@@ -145,6 +158,7 @@ export function broadcastLeagueUpdate(sender: WebContents | null, league: string
       }
     })
     .catch(() => {})
+  for (const cb of leagueUpdateListeners) cb(league)
 }
 
 function capturePreviousSettings(store: Store<AppSettings>): RuntimeSettings {

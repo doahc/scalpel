@@ -27,6 +27,8 @@ export default defineConfig({
           regexRemote: resolve(__dirname, 'src/renderer/regex-remote.html'),
           pinnedZone: resolve(__dirname, 'src/renderer/pinned-zone.html'),
           pluginOverlay: resolve(__dirname, 'src/renderer/plugin-overlay.html'),
+          // Companion browser mode: served by the HTTP server in companion mode
+          companion: resolve(__dirname, 'src/renderer/companion.html'),
         },
       },
     },

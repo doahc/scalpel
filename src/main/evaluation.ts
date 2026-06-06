@@ -38,6 +38,26 @@ import {
 } from './trade/prices'
 import { ensureStatsLoaded, matchItemMods } from './trade/trade'
 import { beginSession, decisionsForSession } from './learning'
+import { wsBridge } from './companion/ws-bridge'
+
+/** Send channel+args to the overlay window AND the companion WS bridge.
+ *  In normal mode: sends to the real Electron overlay window AND the bridge.
+ *  In companion mode: the fake window's send() already calls wsBridge.push(),
+ *  so we avoid double-firing by only calling one or the other. */
+function broadcastEvent(channel: string, ...args: unknown[]): void {
+  const win = getOverlayWindow()
+  if (win) {
+    win.webContents.send(channel, ...args)
+    // The fake companion window's send() already pushes to the bridge.
+    // Only push directly when using the REAL overlay window.
+    if (!process.argv.includes('--companion-mode')) {
+      wsBridge.push(channel, ...args)
+    }
+  } else {
+    // No window at all -- push directly to bridge so browser clients still get it.
+    wsBridge.push(channel, ...args)
+  }
+}
 
 // ---- Tier group builder ----------------------------------------------------
 
@@ -201,8 +221,8 @@ export function evaluateAndSend(item: PoeItem): void {
           : lastCursorX != null && lastCursorX < screen.getPrimaryDisplay().workAreaSize.width / 2
             ? 'left'
             : 'right'
-    win.webContents.send('cursor-side', side)
-    win.webContents.send('overlay-data', payload)
+    broadcastEvent('cursor-side', side)
+    broadcastEvent('overlay-data', payload)
   }
 }
 
@@ -310,7 +330,7 @@ export async function preloadPriceCheck(item: PoeItem, store: Store<AppSettings>
 
   const divinePrice = lookupPrice('Divine Orb', 'Divine Orb')
   const chaosPerDivine = divinePrice?.chaosValue ?? 0
-  getOverlayWindow()?.webContents.send('price-check', {
+  broadcastEvent('price-check', {
     item,
     priceInfo,
     statFilters,
@@ -337,6 +357,19 @@ let consecutiveClipboardFailures = 0
  */
 async function captureItemFromClipboard(isElevated: () => boolean): Promise<PoeItem | null> {
   const restoreClip = snapshotClipboard()
+
+  // In companion mode PoE may not be running or focused, so we never inject
+  // Ctrl+C -- the user manually copied the item text before pressing the hotkey.
+  // Just read whatever is on the clipboard right now.
+  if (process.argv.includes('--companion-mode')) {
+    const item = readItemFromClipboard()
+    restoreClip()
+    if (!item) {
+      broadcastEvent('no-item-in-clipboard')
+      return null
+    }
+    return item
+  }
 
   clipboard.clear()
   await sendCtrlCToPoE()
@@ -367,9 +400,9 @@ async function captureItemFromClipboard(isElevated: () => boolean): Promise<PoeI
   if (!item) {
     consecutiveClipboardFailures++
     if (consecutiveClipboardFailures >= 3 && !isElevated()) {
-      getOverlayWindow()?.webContents.send('elevation-hint')
+      broadcastEvent('elevation-hint')
     }
-    getOverlayWindow()?.webContents.send('no-item-in-clipboard')
+    broadcastEvent('no-item-in-clipboard')
     showOverlay()
     return null
   }
@@ -387,15 +420,17 @@ async function captureItemFromClipboard(isElevated: () => boolean): Promise<PoeI
  *  and the user reopens the overlay from the correct game after restart. */
 async function ensureCorrectGameForHotkey(store: Store<AppSettings>): Promise<boolean> {
   if (OverlayController.targetHasFocus) return true
-  // User typing in an overlay text field -- swallow so single-key hotkeys
-  // don't stomp the input. Otherwise if the overlay window itself is focused
-  // (user clicked into it), refocus PoE so the subsequent Ctrl+C reaches the
-  // game window.
   if (isTypingInOverlay()) return false
-  if (getOverlayWindow()?.isFocused()) {
+  // In companion mode there is no native overlay window, so isFocused() would
+  // throw on the fake window. Skip this check -- just proceed.
+  const overlayWin = getOverlayWindow()
+  if (overlayWin && typeof overlayWin.isFocused === 'function' && overlayWin.isFocused()) {
     focusGameWindow()
     return true
   }
+  // In companion mode PoE may not be running at all; skip the game-focus
+  // version check so hotkeys still work for clipboard-based price checking.
+  if (process.argv.includes('--companion-mode')) return true
   const v = await detectFocusedPoeVersion()
   if (!v) return false
   if (v === getPoeVersion()) return true
@@ -413,7 +448,7 @@ async function ensureCorrectGameForHotkey(store: Store<AppSettings>): Promise<bo
 export async function runMainHotkeyFlow(store: Store<AppSettings>, isElevated: () => boolean): Promise<PoeItem | null> {
   const currentFilter = getCurrentFilter()
   if (!currentFilter) {
-    getOverlayWindow()?.webContents.send('no-filter-loaded')
+    broadcastEvent('no-filter-loaded')
     showOverlay()
     return null
   }
@@ -439,7 +474,7 @@ export function createHotkeyHandler(store: Store<AppSettings>, isElevated: () =>
       // Flag the next overlay-data as "came from the filter hotkey" so the renderer
       // forces the item view, even when the user was on pricecheck/audit with the
       // same item already loaded (cache hit -> no view change without this).
-      getOverlayWindow()?.webContents.send('filter-hotkey-open')
+      broadcastEvent('filter-hotkey-open')
       await runMainHotkeyFlow(store, isElevated)
     } catch (err) {
       console.error('[hotkey] Error during hotkey processing:', err)
@@ -452,7 +487,7 @@ export function createHotkeyHandler(store: Store<AppSettings>, isElevated: () =>
 /** Switch the overlay into price-check view and populate it with `item`. Shared by the
  *  clipboard hotkey path and UI-triggered lookups (e.g. clicking a sister overlay row). */
 export async function runPriceCheck(item: PoeItem, store: Store<AppSettings>): Promise<void> {
-  getOverlayWindow()?.webContents.send('price-check-open')
+  broadcastEvent('price-check-open')
   await preloadPriceCheck(item, store)
   showOverlay()
   if (getCurrentFilter()) evaluateAndSend(item)

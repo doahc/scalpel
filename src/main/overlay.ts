@@ -492,8 +492,23 @@ export function toggleOverlay(): void {
 }
 
 export function getOverlayWindow(): BrowserWindow | null {
+  // In companion mode, companionWindow is a structurally compatible fake window
+  // that forwards webContents.send to the WebSocket bridge.
+  if (companionWindow) return companionWindow as unknown as BrowserWindow
   return overlayWindow
 }
+
+/** Companion mode: inject a fake window so evaluation.ts and trade.ts
+ *  send events through the WebSocket bridge instead of to a real renderer.
+ *  The fake window is structurally compatible: only isDestroyed() and
+ *  webContents.send() are actually called on it at runtime. */
+export function setCompanionWindow(
+  win: { isDestroyed(): boolean; webContents: { send(c: string, ...a: unknown[]): void } } | null,
+): void {
+  companionWindow = win as unknown as BrowserWindow | null
+}
+
+let companionWindow: BrowserWindow | null = null
 
 /** Make PoE the OS foreground window so SendInput reaches it, not the overlay. */
 export function setGameFocusHandlers(onFocus: () => void, onBlur: () => void): void {

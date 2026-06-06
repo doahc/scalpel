@@ -144,7 +144,19 @@ import {
   getProfileBackedSetting,
   hydrateActiveProfileSettings,
   writeActiveProfileSetting,
+  ensureProfileForGame,
 } from './profiles/profile-settings'
+import { startCompanionServer, getCompanionPort } from './companion/server'
+import { wireCompanionBridge } from './companion/bridge-wiring'
+import { startCompanionClipboardWatcher } from './companion/clipboard-watcher'
+import { setPoeVersion } from './game-state'
+import { loadTierData, refreshTierData } from './tier-data'
+
+// ---- Companion mode detection ----------------------------------------------
+// Launch with --companion-mode (or set SCALPEL_COMPANION=1) to skip the
+// overlay window and native input hook entirely, and instead start the
+// HTTP + WebSocket companion server for browser access.
+const IS_COMPANION = process.argv.includes('--companion-mode') || process.env.SCALPEL_COMPANION === '1'
 
 // ---- Linux display-server setup --------------------------------------------
 
@@ -157,7 +169,12 @@ if (
   process.env.WAYLAND_DISPLAY &&
   !process.argv.some((a) => a.startsWith('--ozone-platform='))
 ) {
-  app.relaunch({ args: [...process.argv.slice(1), '--ozone-platform=x11'] })
+  const extraArgs = []
+  // Preserve companion mode flag across the X11 relaunch
+  if (IS_COMPANION && !process.argv.includes('--companion-mode')) {
+    extraArgs.push('--companion-mode')
+  }
+  app.relaunch({ args: [...process.argv.slice(1), '--ozone-platform=x11', ...extraArgs] })
   app.exit(0)
 }
 
@@ -384,6 +401,18 @@ function createTray(): void {
     },
     { type: 'separator' },
     {
+      label: 'Open Companion in Browser',
+      click: () => {
+        const port = getCompanionPort()
+        if (port > 0) {
+          import('electron').then(({ shell }) => {
+            shell.openExternal(`http://127.0.0.1:${port}`)
+          })
+        }
+      },
+    },
+    { type: 'separator' },
+    {
       label: 'Settings',
       click: () => showAppWindow(),
     },
@@ -490,16 +519,63 @@ app.whenReady().then(() => {
   // Seed the overlay with the last-known game version so attachByTitle waits for
   // that window. The hotkey handler re-detects the focused PoE on every fire and
   // relaunches to swap versions if needed (ensureCorrectGameForHotkey).
-  if (!IS_E2E) createOverlayWindow((store.get(PROFILE_VERSION_KEY) as GameVariant) ?? 1)
+  if (!IS_E2E && !IS_COMPANION) createOverlayWindow((store.get(PROFILE_VERSION_KEY) as GameVariant) ?? 1)
+  // In companion mode createOverlayWindow (which calls setPoeVersion) is never
+  // called -- game-state stays at default 1 even for PoE2 profiles.
+  // Set it explicitly so trade searches hit the right endpoint.
+  if (IS_COMPANION) {
+    const companionVersion = (store.get(PROFILE_VERSION_KEY) as GameVariant) ?? 2
+    setPoeVersion(companionVersion)
+    // Also load tier data so filter panel mod matching works correctly.
+    loadTierData(companionVersion)
+      .then(() => refreshTierData(companionVersion))
+      .catch(() => {})
+  }
   // Let the secondary-overlay system know about the main overlay window so its
   // isAnyScalpelWindowFocused predicate can include it.
   setMainOverlayGetter(getOverlayWindow)
   // When focus leaves Scalpel via the PoE -> overlay -> other-app path
   // (which the PoE-blur handler can't catch), suspend hotkeys so they don't
   // fire in the destination app.
-  if (!IS_E2E) setOnLeaveScalpel(() => suspendHotkeys())
+  if (!IS_E2E && !IS_COMPANION) setOnLeaveScalpel(() => suspendHotkeys())
   createAppWindow(store)
   if (!IS_E2E) createTray()
+
+  // ---- Companion HTTP+WS server (always started; tray provides browser link) --
+  // Even in normal overlay mode, the companion server runs so users on Hyprland
+  // can open a browser tab as a fallback. In companion mode it is the primary UI.
+  startCompanionServer({ store, port: 0 })
+  // Wire events to the bridge so browser clients stay in sync regardless of mode.
+  wireCompanionBridge(IS_COMPANION).catch((err) => console.error('[companion] bridge wiring failed:', err))
+
+  // ---- Companion mode: auto-open browser and skip overlay live services -----
+  if (IS_COMPANION) {
+    // On fresh installs: fetch leagues first so the profile gets a real league,
+    // then ensure a profile exists. On subsequent runs the league is already set.
+    refreshLeagues(store, undefined as unknown as Parameters<typeof refreshLeagues>[1], { force: true })
+      .then(() => ensureProfileForGame(store, (store.get(PROFILE_VERSION_KEY) as GameVariant) ?? 2))
+      .catch(() => {})
+
+    // Minimal live services for companion (prices + manifest; no overlay window needed)
+    refreshManifest().catch(() => {})
+    refreshPrices(getProfileBackedSetting(store, 'league'))
+    setInterval(() => refreshPrices(getProfileBackedSetting(store, 'league')), 10 * 60 * 1000)
+
+    // Poll clipboard every 500ms. When a valid PoE item is detected, fire the
+    // price-check pipeline automatically -- no hotkey required, works on Wayland.
+    startCompanionClipboardWatcher(store)
+
+    // Auto-open the browser shortly after startup (port assigned by OS)
+    setTimeout(() => {
+      const port = getCompanionPort()
+      if (port > 0) {
+        import('electron').then(({ shell }) => {
+          shell.openExternal(`http://127.0.0.1:${port}`)
+        })
+        console.log(`[companion] Open in browser: http://127.0.0.1:${port}`)
+      }
+    }, 500)
+  }
 
   // Serve plugin-facing built-in modules (React, SDK) via a custom scheme so
   // plugins can import them without bundling their own copies.
@@ -745,7 +821,7 @@ app.whenReady().then(() => {
   // Apply close-on-click-outside setting
   setCloseOnClickOutside(store.get('closeOnClickOutside'))
 
-  if (!IS_E2E) startLiveServices()
+  if (!IS_E2E && !IS_COMPANION) startLiveServices()
 
   // Show onboarding/settings on first launch, otherwise respect startInTray.
   // E2E harness always shows the window so the Playwright test can interact.

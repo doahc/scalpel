@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scalpel Companion</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        /* Dark background so the panel is readable even before theme CSS loads */
+        background: #0e0e0e;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        color: #e0e0e0;
+        -webkit-app-region: no-drag;
+      }
+      #root {
+        width: 100vw;
+        min-height: 100vh;
+        overflow-y: auto;
+      }
+      /* Loading state shown before React mounts */
+      #companion-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-size: 14px;
+        opacity: 0.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="companion-loading">Connecting to Scalpel…</div>
+    </div>
+    <script type="module" src="/src/companion-main.tsx"></script>
+  </body>
+</html>

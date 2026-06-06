@@ -15,6 +15,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "npm run build:internal-assets && node scripts/sync-regex-data.js & electron-vite dev",
+    "dev:companion": "npm run build:internal-assets && electron-vite dev -- --companion-mode",
     "build": "npm run build:internal-assets && electron-vite build",
     "build:internal-assets": "node scripts/build-internal-assets.mjs",
     "build-tier-data": "node scripts/build-tier-data.js",
@@ -36,6 +37,7 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@types/ws": "^8.18.1",
     "active-win": "^9.0.0",
     "electron-overlay-window": "^4.0.2",
     "electron-store": "^8.2.0",
@@ -44,6 +46,7 @@
     "react-sortablejs": "^6.1.4",
     "sortablejs": "^1.15.7",
     "uiohook-napi": "^1.5.4",
+    "ws": "^8.21.0",
     "zustand": "^4.5.7"
   },
   "devDependencies": {

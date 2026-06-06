@@ -2,6 +2,7 @@ export type DiagnosticSource =
   | 'main'
   | 'app'
   | 'overlay'
+  | 'companion'
   | 'whiteboard'
   | 'cheat-sheets'
   | 'cheat-sheet-preview'
